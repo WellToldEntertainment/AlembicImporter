@@ -15,7 +15,7 @@ namespace UTJ.Alembic
         private bool m_GeneratePrefab = true;
 
 
-#if !UNITY_5_7_OR_NEWER && !ENABLE_SCRIPTED_IMPORTERS
+#if !UNITY_2017_1_OR_NEWER && !ENABLE_SCRIPTED_IMPORTERS
 
         [MenuItem("Assets/Alembic/Import asset...")]
 #endif
@@ -84,11 +84,21 @@ namespace UTJ.Alembic
             {
                 m_ImportSettings.m_swapFaceWinding = EditorGUILayout.Toggle("Swap face winding", m_ImportSettings.m_swapFaceWinding);
             });
+
             AlembicUI.AddHorzLine(() =>
             {
-                m_ImportSettings.m_submeshPerUVTile = EditorGUILayout.Toggle("Submesh per UV tile",
-                    m_ImportSettings.m_submeshPerUVTile);
+                m_ImportSettings.m_shareVertices = EditorGUILayout.Toggle("Merge Vertices (experimental)", m_ImportSettings.m_shareVertices);
             });
+
+            AlembicUI.AddHorzLine(() =>
+            {
+                m_ImportSettings.m_treatVertexExtraDataAsStatics = EditorGUILayout.Toggle("Vertex extra data is static (experimental)", m_ImportSettings.m_treatVertexExtraDataAsStatics);
+            });
+            AlembicUI.AddHorzLine(() =>
+            {
+                m_ImportSettings.m_scaleFactor = EditorGUILayout.FloatField("m_scaleFactor", m_ImportSettings.m_scaleFactor);
+            });
+
             AlembicUI.AddHorzLine(() =>
             {
                 string[] enumNamesList = System.Enum.GetNames(typeof(AbcAPI.aiNormalsMode));
@@ -118,12 +128,8 @@ namespace UTJ.Alembic
 
             AlembicUI.AddHorzLine(() =>
             {
-                m_ImportSettings.m_useThreads = EditorGUILayout.Toggle("Use ABC threads", m_ImportSettings.m_useThreads);
-            });
-            AlembicUI.AddHorzLine(() =>
-            {
-                m_ImportSettings.m_sampleCacheSize = EditorGUILayout.IntField("Sample cache size",
-                    m_ImportSettings.m_sampleCacheSize);
+                m_ImportSettings.m_cacheSamples = EditorGUILayout.Toggle("Cache samples",
+                    m_ImportSettings.m_cacheSamples);
             });
 
 

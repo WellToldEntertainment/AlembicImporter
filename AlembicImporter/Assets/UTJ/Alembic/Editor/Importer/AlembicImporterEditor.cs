@@ -21,13 +21,38 @@ namespace UTJ.Alembic
 
             AddBoolProperty(serSettings.FindPropertyRelative(() => settings.m_swapHandedness), "Swap handedness", "");
             AddBoolProperty(serSettings.FindPropertyRelative(() => settings.m_swapFaceWinding), "Swap face winding", "");
-            AddBoolProperty(serSettings.FindPropertyRelative(() => settings.m_submeshPerUVTile), "Submesh per UV tile", "");
+            AddBoolProperty(serSettings.FindPropertyRelative(() => settings.m_TurnQuadEdges), "Turn Quad Edges", "");
+            AddBoolProperty(serSettings.FindPropertyRelative(() => settings.m_shareVertices), "Merge Vertices (experimental)", "Allow vertex sharing between faces when possible.");
+            AddBoolProperty(serSettings.FindPropertyRelative(() => settings.m_treatVertexExtraDataAsStatics), "Vertex extra data is static (exp.)", "When set, UV's/normals/tangents are fetched from file only on topology change event.");
+            AddFloatProperty(serSettings.FindPropertyRelative(() => settings.m_scaleFactor), "Scale factor", "Apply a uniform scale to the root node of the model");
 
             AddEnumProperty(serSettings.FindPropertyRelative(() => settings.m_normalsMode), "Normals mode", "", settings.m_normalsMode.GetType());
             AddEnumProperty(serSettings.FindPropertyRelative(() => settings.m_tangentsMode), "Tangent mode", "", settings.m_tangentsMode.GetType());
             AddEnumProperty(serSettings.FindPropertyRelative(() => settings.m_aspectRatioMode), "Aspect ratio mode", "", settings.m_aspectRatioMode.GetType());
-            AddBoolProperty(serSettings.FindPropertyRelative(() => settings.m_useThreads), "Use threads", "");
-            AddIntProperty(serSettings.FindPropertyRelative(() => settings.m_sampleCacheSize), "Sample cache size", "");
+
+            EditorGUILayout.Separator();
+            var min = serSettings.FindPropertyRelative(() => settings.m_minTime).floatValue;
+            var max = serSettings.FindPropertyRelative(() => settings.m_maxTime).floatValue;
+            var startVal = serSettings.FindPropertyRelative(() => settings.m_startTime);
+            var endVal = serSettings.FindPropertyRelative(() => settings.m_endTime);
+            var startFloat = startVal.floatValue;
+            var endFloat = endVal.floatValue;
+            
+            EditorGUILayout.MinMaxSlider("Time range",ref startFloat,ref endFloat,min,max);
+            EditorGUILayout.BeginHorizontal();
+            startVal.floatValue = EditorGUILayout.FloatField(new GUIContent(" ","Start time"),startFloat,GUILayout.MinWidth(90.0f));
+            endVal.floatValue = EditorGUILayout.FloatField(new GUIContent(" ","End time"),endFloat,GUILayout.MinWidth(90.0f));
+            EditorGUILayout.EndHorizontal();
+
+            if (startVal.floatValue < min)
+                startVal.floatValue = min;
+            if (endVal.floatValue > max)
+                endVal.floatValue = max;
+            if (startVal.floatValue > endVal.floatValue)
+                startVal.floatValue = min;
+
+            EditorGUILayout.Separator();
+            AddBoolProperty(serSettings.FindPropertyRelative(() => settings.m_cacheSamples), "Cache samples", "Cache all samples upfront");
             
             base.ApplyRevertGUI();
         }
@@ -60,6 +85,12 @@ namespace UTJ.Alembic
             porperty.intValue = newValue;
         }
 
+        void AddFloatProperty(SerializedProperty porperty, string text, string tooltip)
+        {
+            var orgValue = porperty.floatValue;
+            var newValue = EditorGUILayout.FloatField(new GUIContent(text, tooltip), orgValue);
+            porperty.floatValue = newValue;
+        }
     }
 }
 

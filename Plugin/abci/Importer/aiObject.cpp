@@ -84,31 +84,30 @@ void aiObject::readConfig()
     }
 }
 
-void aiObject::updateSample(float time)
+void aiObject::updateSample(const abcSampleSelector& ss)
 {
-    DebugLog("aiObject::updateSample(obj='%s', t=%f)", getFullName(), time);
-
+    DebugLog("aiObject::updateSample(obj='%s', t=%f)", getFullName(), ss.getRequestedTime());
     for (auto s : m_schemas)
     {
-        s->updateSample(aiTimeToSampleSelector(time));
+        s->updateSample(ss);
     }
 }
 
-void aiObject::notifyUpdate()
-{
-    for (auto s : m_schemas)
-    {
-        s->notifyUpdate();
-    }
-}
-
-aiContext*  aiObject::getContext() { return m_ctx; }
+aiContext*  aiObject::getContext() const { return m_ctx; }
 abcObject&  aiObject::getAbcObject() { return m_abc; }
 const char* aiObject::getName() const { return m_abc.getName().c_str(); }
 const char* aiObject::getFullName() const { return m_abc.getFullName().c_str(); }
 uint32_t    aiObject::getNumChildren() const { return (uint32_t)m_children.size(); }
 aiObject*   aiObject::getChild(int i) { return m_children[i]; }
-aiObject*   aiObject::getParent() { return m_parent; }
+aiObject*   aiObject::getParent() const { return m_parent; }
+
+void aiObject::cacheSamples(int64_t startIndex, int64_t endIndex)
+{
+    for (auto s : m_schemas)
+    {
+        s->cacheSamples(startIndex,endIndex);
+    }
+}
 
 aiXForm*    aiObject::getXForm()      { return m_xform.get(); }
 aiPolyMesh* aiObject::getPolyMesh()   { return m_polymesh.get(); }

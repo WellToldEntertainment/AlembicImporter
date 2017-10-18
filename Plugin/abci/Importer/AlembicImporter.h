@@ -110,9 +110,12 @@ struct aiConfig
     bool cacheTangentsSplits = true;
     float aspectRatio = -1.0f;
     bool forceUpdate = false;
-    bool useThreads = true;
-    int32_t cacheSamples = 0;
-    bool submeshPerUVTile = true;
+    bool cacheSamples = false;
+    bool shareVertices = false;
+    bool treatVertexExtraDataAsStatic = false;
+    bool interpolateSamples = true;
+    bool turnQuadEdges = false;
+    float vertexMotionScale = 1.0f;
 };
 
 struct aiTimeSamplingData
@@ -160,12 +163,15 @@ struct aiMeshSampleSummary
     bool hasNormals = false;
     bool hasUVs = false;
     bool hasTangents = false;
+    bool hasVelocities = false;
 };
 
 struct aiPolyMeshData
 {
     abcV3 *positions = nullptr;
     abcV3 *velocities = nullptr;
+    abcV2 *interpolatedVelocitiesXY = nullptr;
+    abcV2 *interpolatedVelocitiesZ = nullptr;
     abcV3 *normals = nullptr;
     abcV2 *uvs = nullptr;
     abcV4 *tangents = nullptr;
@@ -251,13 +257,13 @@ using aiNodeEnumerator = void (abciSTDCall*)(aiObject *node, void *userData);
 using aiConfigCallback =  void (abciSTDCall*)(void *csObj, aiConfig *config);
 using aiSampleCallback = void (abciSTDCall*)(void *csObj, aiSampleBase *sample, bool topologyChanged);
 
-
 abciAPI abcSampleSelector aiTimeToSampleSelector(float time);
-abciAPI abcSampleSelector aiIndexToSampleSelector(int index);
+abciAPI abcSampleSelector aiIndexToSampleSelector(int64_t index);
 
 abciAPI void            aiEnableFileLog(bool on, const char *path);
 
 abciAPI void            aiCleanup();
+abciAPI void            clearContextsWithPath(const char *path);
 abciAPI aiContext*      aiCreateContext(int uid);
 abciAPI void            aiDestroyContext(aiContext* ctx);
 
@@ -274,8 +280,6 @@ abciAPI void            aiGetTimeSampling(aiContext* ctx, int i, aiTimeSamplingD
 abciAPI void            aiCopyTimeSampling(aiContext* ctx, int i, aiTimeSamplingData *dst);
 
 abciAPI void            aiUpdateSamples(aiContext* ctx, float time);
-abciAPI void            aiUpdateSamplesBegin(aiContext* ctx, float time);   // async version
-abciAPI void            aiUpdateSamplesEnd(aiContext* ctx);                 // async version
 
 abciAPI void            aiEnumerateChild(aiObject *obj, aiNodeEnumerator e, void *userData);
 abciAPI const char*     aiGetNameS(aiObject* obj);

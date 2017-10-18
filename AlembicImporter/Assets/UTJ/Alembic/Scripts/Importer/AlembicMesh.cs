@@ -8,11 +8,14 @@ namespace UTJ.Alembic
     public class AlembicMesh : AlembicElement
     {
         public class Split
-        {
-            public PinnedList<Vector3> positionCache = new PinnedList<Vector3>();
-            public PinnedList<Vector3> normalCache = new PinnedList<Vector3>();
-            public PinnedList<Vector2> uvCache = new PinnedList<Vector2>();
-            public PinnedList<Vector4> tangentCache = new PinnedList<Vector4>();
+        {\
+            public Vector3[] positionCache;
+            public Vector3[] normalCache;
+            public Vector3[] velocitiesCache;
+            public Vector2[] velocitiesXYCache;
+            public Vector2[] velocitiesZCache;
+            public Vector2[] uvCache;
+            public Vector4[] tangentCache;\
             public Mesh mesh;
             public GameObject host;
 
@@ -179,10 +182,53 @@ namespace UTJ.Alembic
 
                 int vertexCount = AbcAPI.aiPolyMeshGetVertexBufferLength(sample, s);
 
-                split.positionCache.ResizeDiscard(vertexCount);
-                if (m_sampleSummary.hasNormals) split.normalCache.ResizeDiscard(vertexCount);
-                if (m_sampleSummary.hasUVs) split.uvCache.ResizeDiscard(vertexCount);
-                if (m_sampleSummary.hasTangents) split.tangentCache.ResizeDiscard(vertexCount);
+                Array.Resize(ref split.positionCache, vertexCount);
+                vertexData.positions = GetArrayPtr(split.positionCache);
+
+                if (m_sampleSummary.hasVelocities)
+                {
+                    Array.Resize(ref split.velocitiesCache, vertexCount);
+                    vertexData.velocities = GetArrayPtr(split.velocitiesCache);
+
+                    Array.Resize(ref split.velocitiesXYCache, vertexCount);
+                    vertexData.interpolatedVelocitiesXY = GetArrayPtr(split.velocitiesXYCache);
+                    
+                    Array.Resize(ref split.velocitiesZCache, vertexCount);
+                    vertexData.interpolatedVelocitiesZ = GetArrayPtr(split.velocitiesZCache);    
+                }
+
+                if (m_sampleSummary.hasNormals)
+                {
+                    Array.Resize(ref split.normalCache, vertexCount);
+                    vertexData.normals = GetArrayPtr(split.normalCache);
+                }
+                else
+                {
+                    Array.Resize(ref split.normalCache, 0);
+                    vertexData.normals = IntPtr.Zero;
+                }
+
+                if (m_sampleSummary.hasUVs)
+                {
+                    Array.Resize(ref split.uvCache, vertexCount);
+                    vertexData.uvs = GetArrayPtr(split.uvCache);
+                }
+                else
+                {
+                    Array.Resize(ref split.uvCache, 0);
+                    vertexData.uvs = IntPtr.Zero;
+                }
+
+                if (m_sampleSummary.hasTangents)
+                {
+                    Array.Resize(ref split.tangentCache, vertexCount);
+                    vertexData.tangents = GetArrayPtr(split.tangentCache);
+                }
+                else
+                {
+                    Array.Resize(ref split.tangentCache, 0);
+                    vertexData.tangents = IntPtr.Zero;
+                }
 
                 var vertexData = new AbcAPI.aiPolyMeshData();
                 vertexData.positions = split.positionCache;
@@ -320,7 +366,6 @@ namespace UTJ.Alembic
                     if (split.mesh == null)
                     {
                         split.mesh = AddMeshComponents(m_abcObj, split.host);
-//                        split.mesh.name = ""split.host.name;
                     }
 
                     if (split.clear)
@@ -328,10 +373,12 @@ namespace UTJ.Alembic
                         split.mesh.Clear();
                     }
 
-                    split.mesh.SetVertices(split.positionCache);
-                    if (split.normalCache.Count > 0) split.mesh.SetNormals(split.normalCache);
-                    if (split.tangentCache.Count > 0) split.mesh.SetTangents(split.tangentCache);
-                    if (split.uvCache.Count > 0) split.mesh.SetUVs(0, split.uvCache);
+                    split.mesh.vertices = split.positionCache;
+                    split.mesh.normals = split.normalCache;
+                    split.mesh.tangents = split.tangentCache;
+                    split.mesh.uv3 = split.velocitiesXYCache;
+                    split.mesh.uv4 = split.velocitiesZCache;
+                    split.mesh.uv = split.uvCache;
                     // update the bounds
                     split.mesh.bounds = new Bounds(split.center, split.size);
 
@@ -432,15 +479,22 @@ namespace UTJ.Alembic
                     renderer = gameObject.AddComponent<MeshRenderer>();
                 }
 
+                var mat = gameObject.transform.parent.GetComponentInChildren<MeshRenderer>().sharedMaterial;
     #if UNITY_EDITOR
-                Material material = UnityEngine.Object.Instantiate(AbcUtils.GetDefaultMaterial());
-                material.name = "Material_0";
-                renderer.sharedMaterial = material;
+                if (mat == null)
+                {
+                    mat = UnityEngine.Object.Instantiate(AbcUtils.GetDefaultMaterial());
+                    mat.name = "Material_0";    
+                }
     #endif
+                renderer.sharedMaterial = mat;
+
             }
             else
             {
-                mesh = meshFilter.sharedMesh;
+                mesh = UnityEngine.Object.Instantiate(meshFilter.sharedMesh);
+                meshFilter.sharedMesh = mesh;
+                mesh.name = "dyn: " + gameObject.name;
             }
 
             return mesh;

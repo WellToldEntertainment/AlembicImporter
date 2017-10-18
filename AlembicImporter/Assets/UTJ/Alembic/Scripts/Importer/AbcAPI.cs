@@ -133,9 +133,12 @@ namespace UTJ.Alembic
             public Bool cacheTangentsSplits;
             public float aspectRatio;
             public Bool forceUpdate;
-            public Bool useThreads;
-            public int cacheSamples;
-            public Bool submeshPerUVTile;
+            public Bool cacheSamples;
+            public Bool shareVertices;
+            public Bool treatVertexExtraDataAsStatics;
+            public Bool interpolateSamples;
+            public Bool turnQuadEdges;
+            public float vertexMotionScale;
 
             public void SetDefaults()
             {
@@ -146,9 +149,11 @@ namespace UTJ.Alembic
                 cacheTangentsSplits = true;
                 aspectRatio = -1.0f;
                 forceUpdate = false;
-                useThreads = true;
-                cacheSamples = 0;
-                submeshPerUVTile = true;
+                cacheSamples = false;
+                shareVertices = true;
+                treatVertexExtraDataAsStatics = true;
+                interpolateSamples = true;
+                turnQuadEdges = false;
             }
         }
 
@@ -181,6 +186,7 @@ namespace UTJ.Alembic
             public Bool hasNormals;
             public Bool hasUVs;
             public Bool hasTangents;
+            public Bool hasVelocities;
         }
 
         public struct aiPolyMeshData
@@ -190,6 +196,8 @@ namespace UTJ.Alembic
 
             public IntPtr positions;
             public IntPtr velocities;
+            public IntPtr interpolatedVelocitiesXY;
+            public IntPtr interpolatedVelocitiesZ;
             public IntPtr normals;
             public IntPtr uvs;
             public IntPtr tangents;
@@ -315,6 +323,7 @@ namespace UTJ.Alembic
         [DllImport("abci")] public static extern void       aiEnableFileLog(Bool on, string path);
 
         [DllImport("abci")] public static extern void       aiCleanup();
+        [DllImport("abci")] public static extern void       clearContextsWithPath(string path);
         [DllImport("abci")] public static extern aiContext  aiCreateContext(int uid);
         [DllImport("abci")] public static extern void       aiDestroyContext(aiContext ctx);
         
@@ -326,9 +335,6 @@ namespace UTJ.Alembic
         [DllImport("abci")] public static extern void       aiDestroyObject(aiContext ctx, aiObject obj);
 
         [DllImport("abci")] public static extern void       aiUpdateSamples(aiContext ctx, float time);
-        [DllImport("abci")] public static extern void       aiUpdateSamplesBegin(aiContext ctx, float time);
-        [DllImport("abci")] public static extern void       aiUpdateSamplesEnd(aiContext ctx);
-
         [DllImport("abci")] public static extern void       aiEnumerateChild(aiObject obj, aiNodeEnumerator e, IntPtr userData);
         [DllImport("abci")] private static extern IntPtr    aiGetNameS(aiObject obj);
         [DllImport("abci")] private static extern IntPtr    aiGetFullNameS(aiObject obj);
@@ -415,43 +421,6 @@ namespace UTJ.Alembic
             Uri pathToAssets = new Uri(Application.streamingAssetsPath + "/");
             return pathToAssets.MakeRelativeUri(new Uri(path)).ToString();
         }
-    /*
-        public static GameObject ImportAbc(string path)
-        {
-            var relPath = MakeRelativePath(path);
-            ImportParams p = new ImportParams();
-            return ImportImpl(relPath, p);
-        }
-
-        private static GameObject ImportImpl(string path, ImportParams p)
-        {
-            if (path == null || path == "")
-            {
-                return null;
-            }
-
-            string baseName = System.IO.Path.GetFileNameWithoutExtension(path);
-            string name = baseName;
-            int index = 1;
-            
-            while (GameObject.Find("/" + name) != null)
-            {
-                name = baseName + index;
-                ++index;
-            }
-
-            var root = new GameObject {name = name};
-            var abcStream = new AlembicStream( root )
-            {
-                m_pathToAbc = path,
-                m_swapHandedness = p.swapHandedness,
-                m_swapFaceWinding = p.swapFaceWinding
-            };
-            abcStream.AbcLoad(true);
-
-            return root;
-        }
-    */
     #endif
         
         public static void UpdateAbcTree(aiContext ctx, AlembicTreeNode node, float time, bool createMissingNodes=false)
@@ -490,7 +459,8 @@ namespace UTJ.Alembic
             // Find targetted child GameObj
             AlembicTreeNode childTreeNode = null;
             GameObject childGO = null;
-            var childTransf = treeNode.linkedGameObj.transform.Find(childName);
+           
+            var childTransf = treeNode.linkedGameObj==null ? null : treeNode.linkedGameObj.transform.Find(childName);
             if (childTransf == null)
             {
                 if (!ic.createMissingNodes)
@@ -507,13 +477,10 @@ namespace UTJ.Alembic
                 trans.localScale = Vector3.one;
             }
             else
-                childGO = childTransf.gameObject;
-
-            if (childTreeNode == null )
-            {
-                childTreeNode = new AlembicTreeNode() {linkedGameObj = childGO, stream = treeNode.stream };
-                treeNode.children.Add(childTreeNode);
-            }
+                childGO = childTransf.gameObject;            
+            
+            childTreeNode = new AlembicTreeNode() {linkedGameObj = childGO, stream = treeNode.stream };
+            treeNode.children.Add(childTreeNode);
 
             // Update
             AlembicElement elem = null;

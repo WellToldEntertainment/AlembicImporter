@@ -4,8 +4,7 @@ using UnityEngine;
 
 namespace UTJ.Alembic
 {
-    [ExecuteInEditMode]
-    public abstract class AlembicElement : AlembicDisposable 
+    public abstract class AlembicElement : IDisposable 
     {
         public AlembicTreeNode AlembicTreeNode { get; set; }
 
@@ -38,17 +37,12 @@ namespace UTJ.Alembic
             return c;
         }
 
-        protected override void Dispose(bool disposing)
+        public void Dispose()
         {
             m_thisHandle.Free();
-
-            if (disposing)
-            {
-                if (AlembicTreeNode != null )
-                    AlembicTreeNode.RemoveAlembicObject(this);
-            }
-
-            base.Dispose( disposing );
+           
+            if (AlembicTreeNode != null )
+                AlembicTreeNode.RemoveAlembicObject(this);
         }
 
         public virtual void AbcSetup(AbcAPI.aiObject abcObj,
