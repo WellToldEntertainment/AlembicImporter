@@ -1869,7 +1869,7 @@ aiPolyMesh::Sample* aiPolyMesh::readSample(const uint64_t idx, bool &topologyCha
     if (!ret->m_topology->m_indices || m_varyingTopology)
     {
         DebugLog("  Read face indices");
-        m_schema.getFaceIndicesProperty().get(ret->m_topology->m_indices, ss);
+        m_schema.getFaceIndicesProperty().get(reinterpret_cast<Abc::Int32ArraySamplePtr&>(ret->m_topology->m_indices), ss);
         topologyChanged = true;
     }
 
