@@ -133,6 +133,14 @@ struct aeCameraData
     float aperture = 2.4f;         // in cm. vertical one
 };
 
+struct aeWeights4
+{
+    float weight[4];
+    int   boneIndex[4];
+
+    bool operator==(const aeWeights4& v) { return memcmp(this, &v, sizeof(*this)) == 0; }
+};
+
 
 
 abciAPI aeContext*  aeCreateContext();
@@ -170,3 +178,5 @@ abciAPI void        aeCameraWriteSample(aeCamera *obj, const aeCameraData *data)
 abciAPI aeProperty* aeNewProperty(aeObject *parent, const char *name, aePropertyType type);
 abciAPI void        aePropertyWriteArraySample(aeProperty *prop, const void *data, int num_data);
 abciAPI void        aePropertyWriteScalarSample(aeProperty *prop, const void *data);
+
+abciAPI int         aeGenerateRemapIndices(int *dst, abcV3 *points, aeWeights4 *weights, int vertex_count);

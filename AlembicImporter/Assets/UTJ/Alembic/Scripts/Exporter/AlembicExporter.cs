@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -18,86 +19,98 @@ namespace UTJ.Alembic
     {
         #region impl
 
-        public static IntPtr GetArrayPtr(Array v)
-        {
-            return Marshal.UnsafeAddrOfPinnedArrayElement(v, 0);
-        }
-
-        public static void CaptureTransform(
-            AbcAPI.aeObject abc, Transform trans,
-            bool inherits, bool invertForward, bool scale)
-        {
-            AbcAPI.aeXFormData data;
-
-            data.inherits = inherits;
-            if (invertForward) { trans.forward = trans.forward * -1.0f; }
-            if (inherits)
-            {
-                data.translation = trans.localPosition;
-                data.rotation = trans.localRotation;
-                data.scale = scale ? trans.localScale : Vector3.one;
-            }
-            else
-            {
-                data.translation = trans.position;
-                data.rotation = trans.rotation;
-                data.scale = scale ? trans.lossyScale : Vector3.one;
-            }
-
-            if (invertForward) { trans.forward = trans.forward * -1.0f; }
-            AbcAPI.aeXFormWriteSample(abc, ref data);
-        }
-
-        public static void CaptureCamera(AbcAPI.aeObject abc, Camera cam, AlembicCameraParams cparams = null)
-        {
-            var data = AbcAPI.aeCameraData.default_value;
-            data.nearClippingPlane = cam.nearClipPlane;
-            data.farClippingPlane = cam.farClipPlane;
-            data.fieldOfView = cam.fieldOfView;
-            if(cparams != null)
-            {
-                data.focalLength = cparams.m_focalLength;
-                data.focusDistance = cparams.m_focusDistance;
-                data.aperture = cparams.m_aperture;
-                data.aspectRatio = cparams.GetAspectRatio();
-            }
-            AbcAPI.aeCameraWriteSample(abc, ref data);
-        }
-
         public class MeshBuffer
         {
-            public int[] indices;
-            public Vector3[] vertices;
-            public Vector3[] normals;
-            public Vector2[] uvs;
+            public PinnedList<int> indices = new PinnedList<int>();
+            public PinnedList<Vector3> vertices = new PinnedList<Vector3>();
+            public PinnedList<Vector3> normals = new PinnedList<Vector3>();
+            public PinnedList<Vector2> uvs = new PinnedList<Vector2>();
+
+            public void Clear()
+            {
+                indices.Clear();
+                vertices.Clear();
+                normals.Clear();
+                uvs.Clear();
+            }
+
+            public void Capture(Mesh mesh)
+            {
+                Clear();
+                indices.Assign(mesh.triangles); // todo: this can be optimized
+                vertices.LockList(ls => mesh.GetVertices(ls));
+                normals.LockList(ls => mesh.GetNormals(ls));
+                uvs.LockList(ls => mesh.GetUVs(0, ls));
+            }
+
+            public void WriteSample(AbcAPI.aeObject abc)
+            {
+                var data = new AbcAPI.aePolyMeshData();
+                data.indices = indices;
+                data.positions = vertices;
+                data.normals = normals;
+                data.uvs = uvs;
+                data.positionCount = vertices.Count;
+                data.indexCount = indices.Count;
+                AbcAPI.aePolyMeshWriteSample(abc, ref data);
+            }
         }
 
-        public static void CaptureMesh(AbcAPI.aeObject abc, Mesh mesh, Cloth cloth, MeshBuffer dst_buf)
+        public class ClothBuffer
         {
-            dst_buf.indices = mesh.triangles;
-            dst_buf.uvs = mesh.uv;
-            if (cloth == null)
+            public PinnedList<int> remap = new PinnedList<int>();
+            public PinnedList<Vector3> vertices = new PinnedList<Vector3>();
+            public PinnedList<Vector3> normals = new PinnedList<Vector3>();
+            public Matrix4x4 toRootBoneSpace;
+            public int numRemappedVertices;
+
+            public void Clear()
             {
-                dst_buf.vertices = mesh.vertices;
-                dst_buf.normals = mesh.normals;
-            }
-            else
-            {
-                dst_buf.vertices = cloth.vertices;
-                dst_buf.normals = cloth.normals;
+                remap.Clear();
+                vertices.Clear();
+                normals.Clear();
             }
 
-            var data = new AbcAPI.aePolyMeshData();
-            data.indices = GetArrayPtr(dst_buf.indices);
-            data.positions = GetArrayPtr(dst_buf.vertices);
-            if(dst_buf.normals != null) { data.normals = GetArrayPtr(dst_buf.normals); }
-            if(dst_buf.uvs != null)     { data.uvs = GetArrayPtr(dst_buf.uvs); }
-            data.positionCount = dst_buf.vertices.Length;
-            data.indexCount = dst_buf.indices.Length;
+            [DllImport("abci")] public static extern int aeGenerateRemapIndices(IntPtr dstIndices, IntPtr points, IntPtr weights4, int numPoints);
+            [DllImport("abci")] public static extern void aeApplyMatrixP(IntPtr dstPoints, int num, ref Matrix4x4 mat);
+            [DllImport("abci")] public static extern void aeApplyMatrixV(IntPtr dstVectors, int num, ref Matrix4x4 mat);
+            void GenerateRemapIndices(Mesh mesh, MeshBuffer mbuf)
+            {
+                mbuf.Capture(mesh);
+                var weights4 = new PinnedList<BoneWeight>();
+                weights4.LockList(l => { mesh.GetBoneWeights(l); });
 
-            AbcAPI.aePolyMeshWriteSample(abc, ref data);
+                remap.Resize(mbuf.vertices.Count);
+                numRemappedVertices = aeGenerateRemapIndices(remap, mbuf.vertices, weights4, mbuf.vertices.Count);
+            }
+
+            public void Capture(Mesh mesh, Cloth cloth, MeshBuffer mbuf)
+            {
+                if (mesh == null || cloth == null)
+                    return;
+                if(remap.Count != mesh.vertexCount)
+                    GenerateRemapIndices(mesh, mbuf);
+
+                vertices.Assign(cloth.vertices);
+                normals.Assign(cloth.normals);
+                if (numRemappedVertices != vertices.Count)
+                {
+                    Debug.LogWarning("numRemappedVertices != vertices.Count");
+                    return;
+                }
+                aeApplyMatrixP(vertices, vertices.Count, ref toRootBoneSpace);
+                aeApplyMatrixV(normals, normals.Count, ref toRootBoneSpace);
+
+                for (int vi = 0; vi < remap.Count; ++vi)
+                    mbuf.vertices[vi] = vertices[remap[vi]];
+                if(normals.Count > 0)
+                {
+                    mbuf.normals.ResizeDiscard(remap.Count);
+                    for (int vi = 0; vi < remap.Count; ++vi)
+                        mbuf.normals[vi] = normals[remap[vi]];
+                }
+            }
         }
-
 
 
         public abstract class ComponentCapturer
@@ -111,16 +124,17 @@ namespace UTJ.Alembic
             public AbcAPI.aeObject abc { get { return m_abc; } }
             public abstract void Capture();
 
-            protected ComponentCapturer(ComponentCapturer p)
+            protected ComponentCapturer(ComponentCapturer p, Component c)
             {
                 m_parent = p;
+                m_obj = c != null ? c.gameObject : null;
             }
         }
 
         public class RootCapturer : ComponentCapturer
         {
             public RootCapturer(AbcAPI.aeObject abc)
-                : base(null)
+                : base(null, null)
             {
                 m_abc = abc;
             }
@@ -136,37 +150,45 @@ namespace UTJ.Alembic
             Transform m_target;
             bool m_inherits = false;
             bool m_invertForward = false;
-            bool m_scale = true;
+            bool m_capturePosition = true;
+            bool m_captureRotation = true;
+            bool m_captureScale = true;
 
-            public bool inherits {
-                get { return m_inherits; }
-                set { m_inherits = value; }
-            }
-            public bool invertForward
-            {
-                get { return m_invertForward; }
-                set { m_invertForward = value; }
-            }
-            public bool scale
-            {
-                get { return m_scale; }
-                set { m_scale = value; }
-            }
+            public bool inherits { set { m_inherits = value; } }
+            public bool invertForward { set { m_invertForward = value; } }
+            public bool capturePosition { set { m_capturePosition = value; } }
+            public bool captureRotation { set { m_captureRotation = value; } }
+            public bool captureScale { set { m_captureScale = value; } }
 
             public TransformCapturer(ComponentCapturer parent, Transform target)
-                : base(parent)
+                : base(parent, target)
             {
-                m_obj = target.gameObject;
                 m_abc = AbcAPI.aeNewXForm(parent.abc, target.name + " (" + target.GetInstanceID().ToString("X8") + ")");
                 m_target = target;
-                m_inherits = inherits;
             }
 
             public override void Capture()
             {
                 if (m_target == null) { return; }
+                var trans = m_target;
 
-                CaptureTransform(m_abc, m_target, m_inherits, m_invertForward, m_scale);
+                AbcAPI.aeXFormData data;
+                if (m_invertForward) { trans.forward = trans.forward * -1.0f; }
+                data.inherits = m_inherits;
+                if (m_inherits)
+                {
+                    data.translation = m_capturePosition ? trans.localPosition : Vector3.zero;
+                    data.rotation = m_captureRotation ? trans.localRotation : Quaternion.identity;
+                    data.scale = m_captureScale ? trans.localScale : Vector3.one;
+                }
+                else
+                {
+                    data.translation = m_capturePosition ? trans.position : Vector3.zero;
+                    data.rotation = m_captureRotation ? trans.rotation : Quaternion.identity;
+                    data.scale = m_captureScale ? trans.lossyScale : Vector3.one;
+                }
+                if (m_invertForward) { trans.forward = trans.forward * -1.0f; }
+                AbcAPI.aeXFormWriteSample(abc, ref data);
             }
         }
 
@@ -176,9 +198,8 @@ namespace UTJ.Alembic
             AlembicCameraParams m_params;
 
             public CameraCapturer(ComponentCapturer parent, Camera target)
-                : base(parent)
+                : base(parent, target)
             {
-                m_obj = target.gameObject;
                 m_abc = AbcAPI.aeNewCamera(parent.abc, target.name);
                 m_target = target;
                 m_params = target.GetComponent<AlembicCameraParams>();
@@ -187,54 +208,88 @@ namespace UTJ.Alembic
             public override void Capture()
             {
                 if (m_target == null) { return; }
+                var cam = m_target;
 
-                CaptureCamera(m_abc, m_target, m_params);
+                var data = AbcAPI.aeCameraData.default_value;
+                data.nearClippingPlane = cam.nearClipPlane;
+                data.farClippingPlane = cam.farClipPlane;
+                data.fieldOfView = cam.fieldOfView;
+                if (m_params != null)
+                {
+                    data.focalLength = m_params.m_focalLength;
+                    data.focusDistance = m_params.m_focusDistance;
+                    data.aperture = m_params.m_aperture;
+                    data.aspectRatio = m_params.GetAspectRatio();
+                }
+                AbcAPI.aeCameraWriteSample(abc, ref data);
             }
         }
 
         public class MeshCapturer : ComponentCapturer
         {
             MeshRenderer m_target;
-            MeshBuffer m_mesh_buffer;
+            MeshBuffer m_mbuf;
 
             public MeshCapturer(ComponentCapturer parent, MeshRenderer target)
-                : base(parent)
+                : base(parent, target)
             {
-                m_obj = target.gameObject;
                 m_abc = AbcAPI.aeNewPolyMesh(parent.abc, target.name);
                 m_target = target;
-                m_mesh_buffer = new MeshBuffer();
+                m_mbuf = new MeshBuffer();
             }
 
             public override void Capture()
             {
                 if (m_target == null) { return; }
 
-                CaptureMesh(m_abc, m_target.GetComponent<MeshFilter>().sharedMesh, null, m_mesh_buffer);
+                var mesh = m_target.GetComponent<MeshFilter>().sharedMesh;
+                if (mesh != null)
+                {
+                    m_mbuf.Capture(mesh);
+                    m_mbuf.WriteSample(abc);
+                }
             }
         }
 
         public class SkinnedMeshCapturer : ComponentCapturer
         {
             SkinnedMeshRenderer m_target;
-            Mesh m_mesh;
-            MeshBuffer m_mesh_buffer;
+            Mesh m_meshSrc;
+            Mesh m_meshBake;
+            Cloth m_cloth;
+            MeshBuffer m_mbuf;
+            ClothBuffer m_cbuf;
 
             public SkinnedMeshCapturer(ComponentCapturer parent, SkinnedMeshRenderer target)
-                : base(parent)
+                : base(parent, target)
             {
-                m_obj = target.gameObject;
                 m_abc = AbcAPI.aeNewPolyMesh(parent.abc, target.name);
                 m_target = target;
-                m_mesh_buffer = new MeshBuffer();
 
-                if (m_target.GetComponent<Cloth>() != null)
+                if (m_target != null)
                 {
-                    var t = m_parent as TransformCapturer;
-                    if (t != null)
+                    m_mbuf = new MeshBuffer();
+                    m_meshSrc = target.sharedMesh;
+                    m_cloth = m_target.GetComponent<Cloth>();
+                    if (m_cloth != null)
                     {
-                        t.scale = false;
+                        m_cbuf = new ClothBuffer();
+                        var rootBone = m_target.rootBone != null ? m_target.rootBone : m_target.GetComponent<Transform>();
+                        m_cbuf.toRootBoneSpace = Matrix4x4.TRS(rootBone.position, rootBone.rotation, Vector3.one);
+
+                        var tc = m_parent as TransformCapturer;
+                        if (tc != null)
+                        {
+                            tc.capturePosition = false;
+                            tc.captureRotation = false;
+                            tc.captureScale = false;
+                        }
                     }
+                    else
+                    {
+                        m_meshBake = new Mesh();
+                    }
+
                 }
             }
 
@@ -242,9 +297,17 @@ namespace UTJ.Alembic
             {
                 if (m_target == null) { return; }
 
-                if (m_mesh == null) { m_mesh = new Mesh(); }
-                m_target.BakeMesh(m_mesh);
-                CaptureMesh(m_abc, m_mesh, m_target.GetComponent<Cloth>(), m_mesh_buffer);
+                if (m_cloth != null)
+                {
+                    m_cbuf.Capture(m_meshSrc, m_cloth, m_mbuf);
+                    m_mbuf.WriteSample(m_abc);
+                }
+                else
+                {
+                    m_target.BakeMesh(m_meshBake);
+                    m_mbuf.Capture(m_meshBake);
+                    m_mbuf.WriteSample(m_abc);
+                }
             }
         }
 
@@ -254,13 +317,12 @@ namespace UTJ.Alembic
             AbcAPI.aeProperty m_prop_rotatrions;
 
             ParticleSystem.Particle[] m_buf_particles;
-            Vector3[] m_buf_positions;
-            Vector4[] m_buf_rotations;
+            PinnedList<Vector3> m_buf_positions = new PinnedList<Vector3>();
+            PinnedList<Vector4> m_buf_rotations = new PinnedList<Vector4>();
 
             public ParticleCapturer(ComponentCapturer parent, ParticleSystem target)
-                : base(parent)
+                : base(parent, target)
             {
-                m_obj = target.gameObject;
                 m_abc = AbcAPI.aeNewPoints(parent.abc, target.name);
                 m_target = target;
 
@@ -272,22 +334,12 @@ namespace UTJ.Alembic
                 if (m_target == null) { return; }
 
                 // create buffer
-#if UNITY_5_5_OR_NEWER
                 int count_max = m_target.main.maxParticles;
-#else
-                int count_max = m_target.maxParticles;
-#endif
-                if (m_buf_particles == null)
+                if (m_buf_particles == null || m_buf_particles.Length != count_max)
                 {
                     m_buf_particles = new ParticleSystem.Particle[count_max];
-                    m_buf_positions = new Vector3[count_max];
-                    m_buf_rotations = new Vector4[count_max];
-                }
-                else if (m_buf_particles.Length != count_max)
-                {
-                    Array.Resize(ref m_buf_particles, count_max);
-                    Array.Resize(ref m_buf_positions, count_max);
-                    Array.Resize(ref m_buf_rotations, count_max);
+                    m_buf_positions.Resize(count_max);
+                    m_buf_rotations.Resize(count_max);
                 }
 
                 // copy particle positions & rotations to buffer
@@ -298,16 +350,16 @@ namespace UTJ.Alembic
                 }
                 for (int i = 0; i < count; ++i)
                 {
-                    m_buf_rotations[i] = m_buf_particles[i].axisOfRotation;
-                    m_buf_rotations[i].w = m_buf_particles[i].rotation;
+                    var a = m_buf_particles[i].axisOfRotation;
+                    m_buf_rotations[i].Set(a.x, a.y, a.z, m_buf_particles[i].rotation);
                 }
 
                 // write!
                 var data = new AbcAPI.aePointsData();
-                data.positions = GetArrayPtr(m_buf_positions);
+                data.positions = m_buf_positions;
                 data.count = count;
                 AbcAPI.aePointsWriteSample(m_abc, ref data);
-                AbcAPI.aePropertyWriteArraySample(m_prop_rotatrions, GetArrayPtr(m_buf_rotations), count);
+                AbcAPI.aePropertyWriteArraySample(m_prop_rotatrions, m_buf_rotations, count);
             }
         }
 
@@ -316,9 +368,8 @@ namespace UTJ.Alembic
             AlembicCustomComponentCapturer m_target;
 
             public CustomCapturerHandler(ComponentCapturer parent, AlembicCustomComponentCapturer target)
-                : base(parent)
+                : base(parent, target)
             {
-                m_obj = target.gameObject;
                 m_target = target;
             }
 
@@ -340,42 +391,32 @@ namespace UTJ.Alembic
         }
     #endif
 
-        #endregion
-
-
         public enum Scope
         {
             EntireScene,
             CurrentBranch,
         }
 
-        [Header("Abc")]
+        #endregion
+
+
+        #region fields
 
         public string m_outputPath;
         public AbcAPI.aeConfig m_conf = AbcAPI.aeConfig.default_value;
-
-        [Header("Capture Components")]
-
         public Scope m_scope = Scope.EntireScene;
-        public bool m_preserveTreeStructure = true;
+        public bool m_fixDeltaTime = true;
         public bool m_ignoreDisabled = true;
-        [Space(8)]
         public bool m_captureMeshRenderer = true;
         public bool m_captureSkinnedMeshRenderer = true;
         public bool m_captureParticleSystem = true;
         public bool m_captureCamera = true;
         public bool m_customCapturer = true;
-
-        [Header("Capture Setting")]
-
-        [Tooltip("Start capture on start.")]
         public bool m_captureOnStart = false;
-        [Tooltip("Automatically end capture when reached Max Capture Frame. 0=Infinite")]
+        public bool m_ignoreFirstFrame = true;
         public int m_maxCaptureFrame = 0;
-
-        [Header("Misc")]
-
-        public bool m_detailedLog;
+        public bool m_detailedLog = true;
+        public bool m_debugLog = false;
 
         AbcAPI.aeContext m_ctx;
         ComponentCapturer m_root;
@@ -384,6 +425,8 @@ namespace UTJ.Alembic
         float m_time;
         float m_elapsed;
         int m_frameCount;
+
+        #endregion
 
 
         public bool isRecording { get { return m_recording; } }
@@ -407,7 +450,7 @@ namespace UTJ.Alembic
 
         public TransformCapturer CreateComponentCapturer(ComponentCapturer parent, Transform target)
         {
-            if (m_detailedLog) { Debug.Log("AlembicExporter: new TransformCapturer(\"" + target.name + "\""); }
+            if (m_debugLog) { Debug.Log("AlembicExporter: new TransformCapturer(\"" + target.name + "\")"); }
 
             var cap = new TransformCapturer(parent, target);
             m_capturers.Add(cap);
@@ -416,7 +459,7 @@ namespace UTJ.Alembic
 
         public CameraCapturer CreateComponentCapturer(ComponentCapturer parent, Camera target)
         {
-            if (m_detailedLog) { Debug.Log("AlembicExporter: new CameraCapturer(\"" + target.name + "\""); }
+            if (m_debugLog) { Debug.Log("AlembicExporter: new CameraCapturer(\"" + target.name + "\")"); }
 
             var cap = new CameraCapturer(parent, target);
             m_capturers.Add(cap);
@@ -425,7 +468,7 @@ namespace UTJ.Alembic
 
         public MeshCapturer CreateComponentCapturer(ComponentCapturer parent, MeshRenderer target)
         {
-            if (m_detailedLog) { Debug.Log("AlembicExporter: new MeshCapturer(\"" + target.name + "\""); }
+            if (m_debugLog) { Debug.Log("AlembicExporter: new MeshCapturer(\"" + target.name + "\")"); }
 
             var cap = new MeshCapturer(parent, target);
             m_capturers.Add(cap);
@@ -434,7 +477,7 @@ namespace UTJ.Alembic
 
         public SkinnedMeshCapturer CreateComponentCapturer(ComponentCapturer parent, SkinnedMeshRenderer target)
         {
-            if (m_detailedLog) { Debug.Log("AlembicExporter: new SkinnedMeshCapturer(\"" + target.name + "\""); }
+            if (m_debugLog) { Debug.Log("AlembicExporter: new SkinnedMeshCapturer(\"" + target.name + "\")"); }
 
             var cap = new SkinnedMeshCapturer(parent, target);
             m_capturers.Add(cap);
@@ -443,7 +486,7 @@ namespace UTJ.Alembic
 
         public ParticleCapturer CreateComponentCapturer(ComponentCapturer parent, ParticleSystem target)
         {
-            if (m_detailedLog) { Debug.Log("AlembicExporter: new ParticleCapturer(\"" + target.name + "\""); }
+            if (m_debugLog) { Debug.Log("AlembicExporter: new ParticleCapturer(\"" + target.name + "\")"); }
 
             var cap = new ParticleCapturer(parent, target);
             m_capturers.Add(cap);
@@ -452,7 +495,7 @@ namespace UTJ.Alembic
 
         public CustomCapturerHandler CreateComponentCapturer(ComponentCapturer parent, AlembicCustomComponentCapturer target)
         {
-            if (m_detailedLog) { Debug.Log("AlembicExporter: new CustomCapturerHandler(\"" + target.name + "\""); }
+            if (m_debugLog) { Debug.Log("AlembicExporter: new CustomCapturerHandler(\"" + target.name + "\")"); }
 
             target.CreateAbcObject(parent.abc);
             var cap = new CustomCapturerHandler(parent, target);
@@ -564,7 +607,7 @@ namespace UTJ.Alembic
         }
         #endregion
 
-        void CreateCapturers_Tree()
+        void CreateCapturers()
         {
             m_root = new RootCapturer(AbcAPI.aeGetTopObject(m_ctx));
             m_capture_node = new Dictionary<Transform, CaptureNode>();
@@ -629,78 +672,28 @@ namespace UTJ.Alembic
             m_capture_node = null;
         }
 
-        void CreateCapturers_Flat()
-        {
-            m_root = new RootCapturer(AbcAPI.aeGetTopObject(m_ctx));
-
-            // Camera
-            if (m_captureCamera)
-            {
-                foreach (var target in GetTargets<Camera>())
-                {
-                    if (ShouldBeIgnored(target)) { continue; }
-                    var trans = CreateComponentCapturer(m_root, target.GetComponent<Transform>());
-                    trans.inherits = false;
-                    trans.invertForward = true;
-                    CreateComponentCapturer(trans, target);
-                }
-            }
-
-            // MeshRenderer
-            if (m_captureMeshRenderer)
-            {
-                foreach (var target in GetTargets<MeshRenderer>())
-                {
-                    if (ShouldBeIgnored(target)) { continue; }
-                    var trans = CreateComponentCapturer(m_root, target.GetComponent<Transform>());
-                    trans.inherits = false;
-                    CreateComponentCapturer(trans, target);
-                }
-            }
-
-            // SkinnedMeshRenderer
-            if (m_captureSkinnedMeshRenderer)
-            {
-                foreach (var target in GetTargets<SkinnedMeshRenderer>())
-                {
-                    if (ShouldBeIgnored(target)) { continue; }
-                    var trans = CreateComponentCapturer(m_root, target.GetComponent<Transform>());
-                    trans.inherits = false;
-                    CreateComponentCapturer(trans, target);
-                }
-            }
-
-            // ParticleSystem
-            if (m_captureParticleSystem)
-            {
-                foreach (var target in GetTargets<ParticleSystem>())
-                {
-                    if (ShouldBeIgnored(target)) { continue; }
-                    var trans = CreateComponentCapturer(m_root, target.GetComponent<Transform>());
-                    trans.inherits = false;
-                    CreateComponentCapturer(trans, target);
-                }
-            }
-
-            // handle custom capturers (AlembicCustomComponentCapturer)
-            if (m_customCapturer)
-            {
-                foreach (var target in GetTargets<AlembicCustomComponentCapturer>())
-                {
-                    if (ShouldBeIgnored(target)) { continue; }
-                    var trans = CreateComponentCapturer(m_root, target.GetComponent<Transform>());
-                    trans.inherits = false;
-                    CreateComponentCapturer(trans, target);
-                }
-            }
-        }
-
 
         public bool BeginCapture()
         {
             if(m_recording) {
                 Debug.Log("AlembicExporter: already started");
                 return false;
+            }
+
+            {
+                var dir = Path.GetDirectoryName(m_outputPath);
+                if (!Directory.Exists(dir))
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(dir);
+                    }
+                    catch(Exception)
+                    {
+                        Debug.LogWarning("Failed to create directory " + dir);
+                        return false;
+                    }
+                }
             }
 
             // create context and open archive
@@ -719,18 +712,13 @@ namespace UTJ.Alembic
             }
 
             // create capturers
-            if(m_preserveTreeStructure) {
-                CreateCapturers_Tree();
-            }
-            else {
-                CreateCapturers_Flat();
-            }
+            CreateCapturers();
 
             m_recording = true;
             m_time = m_conf.startTime;
             m_frameCount = 0;
 
-            if (m_conf.timeSamplingType == AbcAPI.aeTypeSamplingType.Uniform)
+            if (m_conf.timeSamplingType == AbcAPI.aeTimeSamplingType.Uniform && m_fixDeltaTime)
             {
                 Time.maximumDeltaTime = (1.0f / m_conf.frameRate);
             }
@@ -762,9 +750,17 @@ namespace UTJ.Alembic
             }
         }
 
+        int m_prevFrame = 0;
+        bool m_firstFrame = true;
         void ProcessCapture()
         {
-            if (!m_recording) { return; }
+            if (!m_recording || Time.frameCount == m_prevFrame) { return; }
+            m_prevFrame = Time.frameCount;
+            if (m_captureOnStart && m_ignoreFirstFrame && m_firstFrame)
+            {
+                m_firstFrame = false;
+                return;
+            }
 
             float begin_time = Time.realtimeSinceStartup;
 
@@ -779,7 +775,7 @@ namespace UTJ.Alembic
             m_elapsed = Time.realtimeSinceStartup - begin_time;
             if (m_detailedLog)
             {
-                Debug.Log("AlembicExporter.ProcessCapture(): " + (m_elapsed * 1000.0f) + "ms");
+                Debug.Log("AlembicExporter: frame " + m_frameCount + " (" + (m_elapsed * 1000.0f) + " ms)");
             }
 
             if(m_maxCaptureFrame > 0 && m_frameCount >= m_maxCaptureFrame)
@@ -796,7 +792,7 @@ namespace UTJ.Alembic
             ProcessCapture();
 
             // wait maximumDeltaTime if timeSamplingType is uniform
-            if (m_conf.timeSamplingType == AbcAPI.aeTypeSamplingType.Uniform)
+            if (m_conf.timeSamplingType == AbcAPI.aeTimeSamplingType.Uniform && m_fixDeltaTime)
             {
                 AbcAPI.aeWaitMaxDeltaTime();
             }
@@ -806,7 +802,7 @@ namespace UTJ.Alembic
         {
             if (m_outputPath == null || m_outputPath == "")
             {
-                m_outputPath = "Assets/StreamingAssets/" + gameObject.name + ".abc";
+                m_outputPath = "Output/" + gameObject.name + ".abc";
             }
         }
 

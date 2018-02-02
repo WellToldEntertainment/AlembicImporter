@@ -67,7 +67,7 @@ void aiContextManager::destroyContextsWithPath(const char* assetPath)
     {
         if (it->second->getPath() == path)
         {
-            aiLogger::Info("Unregister context for gameObject with ID %d", it->second->getPath());
+            aiLogger::Info("Unregister context for gameObject with ID %s", it->second->getPath().c_str());
             delete it->second;
             ms_instance.m_contexts.erase(it);
         }
@@ -330,6 +330,8 @@ bool aiContext::load(const char *inPath)
             {
                 m_timeRange[0] = ts->getSampleTime(0);
                 m_timeRange[1] = ts->getSampleTime(ts->getNumStoredTimes() - 1);
+
+                if (ts->getNumStoredTimes() > m_numFrames) m_numFrames = ts->getNumStoredTimes();
             }
         }
 
@@ -366,9 +368,9 @@ float aiContext::getEndTime() const
     return float(m_timeRange[1]);
 }
 
-unsigned int aiContext::getFrameCount() const
+int aiContext::getFrameCount() const
 {
-    return m_numFrames;
+    return (int)m_numFrames;
 }
 
 aiObject* aiContext::getTopObject() const

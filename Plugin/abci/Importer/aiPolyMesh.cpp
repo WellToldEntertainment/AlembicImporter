@@ -5,7 +5,7 @@
 #include "aiSchema.h"
 #include "aiPolyMesh.h"
 #include <unordered_map>
-#include "../../Tools/Common/Foundation.h"
+#include "../Foundation/aiMisc.h"
 
 
 #define MAX_VERTEX_SPLIT_COUNT_16 65000
@@ -105,7 +105,7 @@ void Topology::updateSplits(aiPolyMeshSample * meshSample)
     }
     else
     {
-        const int maxVertexSplitCount = m_use32BitsIndexBuffer ? MAX_VERTEX_SPLIT_COUNT_32 : MAX_VERTEX_SPLIT_COUNT_16;
+        const size_t maxVertexSplitCount = m_use32BitsIndexBuffer ? MAX_VERTEX_SPLIT_COUNT_32 : MAX_VERTEX_SPLIT_COUNT_16;
         m_splits.reserve(1 + m_faceIndices->size() / maxVertexSplitCount);
         m_splits.push_back(SplitInfo());
 
@@ -403,7 +403,7 @@ void aiPolyMeshSample::computeSmoothNormals(const aiConfig &config)
     size_t smoothNormalsCount = m_positions->size();
     m_smoothNormals.resize(smoothNormalsCount);
     // sadly, memset() is way faster than std::fill() on VC
-    memset(&m_smoothNormals[0], 0, sizeof(m_smoothNormals[0])*m_smoothNormals.size());
+    memset(m_smoothNormals.data(), 0, sizeof(m_smoothNormals[0])*m_smoothNormals.size());
 
 
     const auto &counts = *(m_topology->m_vertexCountPerFace);
@@ -536,13 +536,15 @@ void aiPolyMeshSample::computeTangents(const aiConfig &config, const abcV3 *inN,
 
     size_t tangentsCount = m_topology->m_tangentsCount;
     m_tangents.resize(tangentsCount);
-    memset(&m_tangents[0], 0, sizeof(m_tangents[0])*m_tangents.size());
+    memset(m_tangents.data(), 0, sizeof(m_tangents[0])*m_tangents.size());
 
+    RawVector<int> tanNidxs(tangentsCount);
+    RawVector<Abc::V3f> tan1(tangentsCount);
+    RawVector<Abc::V3f> tan2(tangentsCount);
+    tanNidxs.zeroclear();
+    tan1.zeroclear();
+    tan2.zeroclear();
 
-    abcV3 *tan1 = new Abc::V3f[2 * tangentsCount];
-    memset(tan1, 0, sizeof(Abc::V3f)* 2 * tangentsCount);
-    abcV3 *tan2 = tan1 + tangentsCount;
-    int *tanNidxs = new int[tangentsCount];
     abcV3 T, B, dP1, dP2, tmp;
     abcV2 dUV1, dUV2;
 
@@ -636,9 +638,6 @@ void aiPolyMeshSample::computeTangents(const aiConfig &config, const abcV3 *inN,
                             ? (m_config.swapHandedness ?  1.0f : -1.0f)
                             : (m_config.swapHandedness ? -1.0f :  1.0f));
     }
-
-    delete[] tanNidxs;
-    delete[] tan1;
 }
 
 void aiPolyMeshSample::updateConfig(const aiConfig &config, bool &topoChanged, bool &dataChanged)
@@ -681,7 +680,7 @@ void aiPolyMeshSample::updateConfig(const aiConfig &config, bool &topoChanged, b
 
         if (smoothNormalsRequired)
         {
-            N = &m_smoothNormals[0];
+            N = m_smoothNormals.data();
         }
         else if (m_normals.valid())
         {
@@ -1955,7 +1954,7 @@ aiPolyMesh::Sample* aiPolyMesh::readSample(const uint64_t idx, bool &topologyCha
         
         if (smoothNormalsRequired)
         {
-            normals = &sample->m_smoothNormals[0];
+            normals = sample->m_smoothNormals.data();
         }
         else if (sample->m_normals.valid())
         {
@@ -2013,7 +2012,7 @@ aiPolyMesh::Sample* aiPolyMesh::readSample(const uint64_t idx, bool &topologyCha
                 const auto& uvIndices = *sample->m_uvs.getIndices();
                 topology->m_UvIndicesSwapedFaceWinding.reserve(sample->m_uvs.getIndices()->size());
 
-                for (auto faceIndex = 0; faceIndex < totalFaces; faceIndex++)
+                for (size_t faceIndex = 0; faceIndex < totalFaces; faceIndex++)
                 {
                     auto faceSize = faces->get()[faceIndex];
                     if (faceSize == 4)
@@ -2127,7 +2126,7 @@ void aiPolyMesh::GenerateVerticesToFacesLookup(aiPolyMeshSample *sample) const
             if (!share)
                 topology->m_FixedTopoPositionsIndexes.push_back(itr->first);
 
-            topology->m_FaceIndexingReindexed[*indexItr] = topology->m_FixedTopoPositionsIndexes.size() - 1;
+            topology->m_FaceIndexingReindexed[*indexItr] = (uint32_t)topology->m_FixedTopoPositionsIndexes.size() - 1;
 
             ++indexItr;
         }
